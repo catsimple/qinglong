@@ -71,9 +71,18 @@ jobs:
           context: .
           file: ./docker/Dockerfile
           build-args: |
-            MAINTAINER=${{ github.repository_owner }}
+            # 1. 显式指定维护者为你自己
+            QL_MAINTAINER=${{ github.repository_owner }}
+            
+            # 2. 显式指定源码地址为你自己的 fork 仓库
+            QL_URL=https://github.com/${{ github.repository }}
+            
+            # 3. 指定分支（github.ref_name 会自动获取当前触发的分支名，即 2.18.0_fix）
             QL_BRANCH=${{ github.ref_name }}
+            
+            # 4. 提交哈希
             SOURCE_COMMIT=${{ github.sha }}
+          
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
