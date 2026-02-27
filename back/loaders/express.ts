@@ -12,6 +12,7 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import { serveEnv } from '../config/serverEnv';
 import Logger from './logger';
 import { IKeyvStore, shareStore } from '../shared/store';
+import { isInitializedAuthInfo } from '../shared/auth';
 
 export default ({ app }: { app: Application }) => {
   app.set('trust proxy', 'loopback');
@@ -98,22 +99,20 @@ export default ({ app }: { app: Application }) => {
   });
 
   app.use(async (req, res, next) => {
-    if (!['/api/user/init', '/api/user/notification/init'].includes(req.path)) {
+    const originPath = `${req.baseUrl}${req.path === '/' ? '' : req.path}`;
+    if (
+      ![
+        '/api/user/init',
+        '/api/user/notification/init',
+        '/open/user/init',
+        '/open/user/notification/init',
+      ].includes(originPath)
+    ) {
       return next();
     }
     const authInfo =
       (await shareStore.getAuthInfo()) || ({} as IKeyvStore['authInfo']);
-
-    let isInitialized = true;
-    if (
-      Object.keys(authInfo).length === 2 &&
-      authInfo.username === 'admin' &&
-      authInfo.password === 'admin'
-    ) {
-      isInitialized = false;
-    }
-
-    if (isInitialized) {
+    if (isInitializedAuthInfo(authInfo)) {
       return res.send({ code: 450, message: '未知错误' });
     } else {
       return next();

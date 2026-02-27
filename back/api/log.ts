@@ -3,10 +3,19 @@ import { Container } from 'typedi';
 import { Logger } from 'winston';
 import config from '../config';
 import { getFileContentByName, readDirs, rmPath } from '../config/util';
-import { join, resolve } from 'path';
+import path, { resolve } from 'path';
 import { celebrate, Joi } from 'celebrate';
 const route = Router();
 const blacklist = ['.tmp'];
+
+const isPathUnderDir = (childPath: string, parentDir: string) => {
+  const parent = path.resolve(parentDir);
+  const child = path.resolve(childPath);
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+};
+
+const safeName = (value: string) => value.replace(/[\\/]/g, '');
 
 export default (app: Router) => {
   app.use('/logs', route);
@@ -37,7 +46,7 @@ export default (app: Router) => {
 
         if (
           blacklist.includes(req.query.path as string) ||
-          !finalPath.startsWith(config.logPath)
+          !isPathUnderDir(finalPath, config.logPath)
         ) {
           return res.send({ code: 403, message: '暂无权限' });
         }
@@ -59,8 +68,8 @@ export default (app: Router) => {
           (req.params.file as string) || '',
         );
         if (
-          blacklist.includes(req.path) ||
-          !finalPath.startsWith(config.logPath)
+          blacklist.includes(req.query.path as string) ||
+          !isPathUnderDir(finalPath, config.logPath)
         ) {
           return res.send({ code: 403, message: '暂无权限' });
         }
@@ -88,7 +97,16 @@ export default (app: Router) => {
           path: string;
           type: string;
         };
-        const filePath = join(config.logPath, path, filename);
+        if (blacklist.includes(path)) {
+          return res.send({ code: 403, message: '暂无权限' });
+        }
+        const safeFilename = safeName(filename);
+        const filePath = path
+          ? resolve(config.logPath, path, safeFilename)
+          : resolve(config.logPath, safeFilename);
+        if (!isPathUnderDir(filePath, config.logPath)) {
+          return res.send({ code: 403, message: '暂无权限' });
+        }
         await rmPath(filePath);
         res.send({ code: 200 });
       } catch (e) {

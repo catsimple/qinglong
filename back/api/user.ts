@@ -8,6 +8,7 @@ import path from 'path';
 import { v4 as uuidV4 } from 'uuid';
 import rateLimit from 'express-rate-limit';
 import config from '../config';
+import { isInitializedAuthInfo } from '../shared/auth';
 const route = Router();
 
 const storage = multer.diskStorage({
@@ -227,6 +228,10 @@ export default (app: Router) => {
       const logger: Logger = Container.get('logger');
       try {
         const userService = Container.get(UserService);
+        const authInfo = await userService.getAuthInfo();
+        if (isInitializedAuthInfo(authInfo)) {
+          return res.send({ code: 450, message: '未知错误' });
+        }
         await userService.updateUsernameAndPassword(req.body);
         res.send({ code: 200, message: '更新成功' });
       } catch (e) {
@@ -241,6 +246,10 @@ export default (app: Router) => {
       const logger: Logger = Container.get('logger');
       try {
         const userService = Container.get(UserService);
+        const authInfo = await userService.getAuthInfo();
+        if (isInitializedAuthInfo(authInfo)) {
+          return res.send({ code: 450, message: '未知错误' });
+        }
         const result = await userService.updateNotificationMode(req.body);
         res.send(result);
       } catch (e) {

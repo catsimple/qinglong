@@ -1,5 +1,5 @@
 import { Service, Inject } from 'typedi';
-import path, { join } from 'path';
+import path from 'path';
 import config from '../config';
 import { getFileContentByName } from '../config/util';
 import { Response } from 'express';
@@ -11,16 +11,15 @@ export default class ConfigService {
 
   public async getFile(filePath: string, res: Response) {
     let content = '';
-    const avaliablePath = [config.rootPath, config.configPath].map((x) =>
-      path.resolve(x, filePath),
-    );
+    const isPathUnderDir = (childPath: string, parentDir: string) => {
+      const parent = path.resolve(parentDir);
+      const child = path.resolve(childPath);
+      const rel = path.relative(parent, child);
+      return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+    };
 
     if (
       config.blackFileList.includes(filePath) ||
-      avaliablePath.every(
-        (x) =>
-          !x.startsWith(config.scriptPath) && !x.startsWith(config.configPath),
-      ) ||
       !filePath
     ) {
       return res.send({ code: 403, message: '文件无法访问' });
@@ -32,9 +31,17 @@ export default class ConfigService {
       );
       content = res.body;
     } else if (filePath.startsWith('data/scripts/')) {
-      content = await getFileContentByName(join(config.rootPath, filePath));
+      const targetPath = path.resolve(config.rootPath, filePath);
+      if (!isPathUnderDir(targetPath, config.scriptPath)) {
+        return res.send({ code: 403, message: '文件无法访问' });
+      }
+      content = await getFileContentByName(targetPath);
     } else {
-      content = await getFileContentByName(join(config.configPath, filePath));
+      const targetPath = path.resolve(config.configPath, filePath);
+      if (!isPathUnderDir(targetPath, config.configPath)) {
+        return res.send({ code: 403, message: '文件无法访问' });
+      }
+      content = await getFileContentByName(targetPath);
     }
 
     res.send({ code: 200, data: content });

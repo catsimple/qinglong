@@ -9,6 +9,13 @@ import { TASK_COMMAND } from '../config/const';
 import { getFileContentByName, getPid, killTask, rmPath } from '../config/util';
 import taskLimit from '../shared/pLimit';
 
+const isPathUnderDir = (childPath: string, parentDir: string) => {
+  const parent = path.resolve(parentDir);
+  const child = path.resolve(childPath);
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+};
+
 @Service()
 export default class ScriptService {
   constructor(
@@ -67,7 +74,7 @@ export default class ScriptService {
   public async getFile(filePath: string, fileName: string) {
     const finalPath = path.resolve(config.scriptPath, filePath, fileName);
 
-    if (!finalPath.startsWith(config.scriptPath)) {
+    if (!isPathUnderDir(finalPath, config.scriptPath)) {
       return '';
     }
 

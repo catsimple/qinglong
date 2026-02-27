@@ -127,8 +127,6 @@ export default {
     '/open/user/login',
     '/open/user/two-factor/login',
     '/open/system',
-    '/open/user/init',
-    '/open/user/notification/init',
   ],
   versionFile,
   lastVersionFile,

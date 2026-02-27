@@ -4,7 +4,7 @@ import { Logger } from 'winston';
 import config from '../config';
 import * as fs from 'fs/promises';
 import { celebrate, Joi } from 'celebrate';
-import { join } from 'path';
+import path, { resolve } from 'path';
 import { SAMPLE_FILES } from '../config/const';
 import ConfigService from '../services/config';
 import { writeFileWithLock } from '../shared/utils';
@@ -12,6 +12,12 @@ const route = Router();
 
 export default (app: Router) => {
   app.use('/configs', route);
+
+  const isPathUnderDir = (childPath: string, parentDir: string) => {
+    const parent = resolve(parentDir);
+    const child = resolve(childPath);
+    return child === parent || child.startsWith(parent + path.sep);
+  };
 
   route.get(
     '/sample',
@@ -72,13 +78,17 @@ export default (app: Router) => {
       try {
         const { name, content } = req.body;
         if (config.blackFileList.includes(name)) {
-          res.send({ code: 403, message: '文件无法访问' });
+          return res.send({ code: 403, message: '文件无法访问' });
         }
-        let path = join(config.configPath, name);
-        if (name.startsWith('data/scripts/')) {
-          path = join(config.rootPath, name);
+        const isScript = name.startsWith('data/scripts/');
+        const targetPath = isScript
+          ? resolve(config.rootPath, name)
+          : resolve(config.configPath, name);
+        const allowedBase = isScript ? config.scriptPath : config.configPath;
+        if (!isPathUnderDir(targetPath, allowedBase)) {
+          return res.send({ code: 403, message: '文件无法访问' });
         }
-        await writeFileWithLock(path, content);
+        await writeFileWithLock(targetPath, content);
         res.send({ code: 200, message: '保存成功' });
       } catch (e) {
         return next(e);

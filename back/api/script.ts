@@ -21,6 +21,15 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
+const isPathUnderDir = (childPath: string, parentDir: string) => {
+  const parent = path.resolve(parentDir);
+  const child = path.resolve(childPath);
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+};
+
+const safeName = (value: string) => value.replace(/[\\/]/g, '');
+
 export default (app: Router) => {
   app.use('/scripts', route);
 
@@ -37,10 +46,13 @@ export default (app: Router) => {
         'package-lock.json',
       ];
       if (req.query.path) {
-        const targetPath = path.join(
+        const targetPath = path.resolve(
           config.scriptPath,
           req.query.path as string,
         );
+        if (!isPathUnderDir(targetPath, config.scriptPath)) {
+          return res.send({ code: 430, message: '文件路径禁止访问' });
+        }
         result = await readDir(targetPath, config.scriptPath, blacklist);
       } else {
         result = await readDirs(
@@ -104,7 +116,7 @@ export default (app: Router) => {
     async (req: Request, res: Response, next: NextFunction) => {
       const logger: Logger = Container.get('logger');
       try {
-        let { filename, path, content, originFilename, directory } =
+        let { filename, path: dirPath, content, originFilename, directory } =
           req.body as {
             filename: string;
             path: string;
@@ -113,16 +125,13 @@ export default (app: Router) => {
             directory: string;
           };
 
-        if (!path) {
-          path = config.scriptPath;
-        }
-        if (!path.endsWith('/')) {
-          path += '/';
-        }
-        if (!path.startsWith('/')) {
-          path = join(config.scriptPath, path);
-        }
-        if (config.writePathList.every((x) => !path.startsWith(x))) {
+        let targetDir = dirPath
+          ? path.isAbsolute(dirPath)
+            ? dirPath
+            : join(config.scriptPath, dirPath)
+          : config.scriptPath;
+        targetDir = path.resolve(targetDir);
+        if (config.writePathList.every((x) => !isPathUnderDir(targetDir, x))) {
           return res.send({
             code: 430,
             message: '文件路径禁止访问',
@@ -130,28 +139,32 @@ export default (app: Router) => {
         }
 
         if (req.file) {
-          await fs.rename(req.file.path, join(path, filename));
+          const safeFilename = safeName(filename);
+          await fs.rename(req.file.path, join(targetDir, safeFilename));
           return res.send({ code: 200 });
         }
 
         if (directory) {
-          await fs.mkdir(join(path, directory), { recursive: true });
+          const targetPath = path.resolve(targetDir, directory);
+          if (!isPathUnderDir(targetPath, targetDir)) {
+            return res.send({ code: 430, message: '文件路径禁止访问' });
+          }
+          await fs.mkdir(targetPath, { recursive: true });
           return res.send({ code: 200 });
         }
 
         if (!originFilename) {
           originFilename = filename;
         }
-        const originFilePath = join(
-          path,
-          `${originFilename.replace(/\//g, '')}`,
-        );
-        const filePath = join(path, `${filename.replace(/\//g, '')}`);
+        const safeOrigin = safeName(originFilename);
+        const safeFilename = safeName(filename);
+        const originFilePath = join(targetDir, safeOrigin);
+        const filePath = join(targetDir, safeFilename);
         const fileExists = await fileExist(filePath);
         if (fileExists) {
           await fs.copyFile(
             originFilePath,
-            join(config.bakPath, originFilename.replace(/\//g, '')),
+            join(config.bakPath, safeOrigin),
           );
           if (filename !== originFilename) {
             await rmPath(originFilePath);
@@ -177,12 +190,22 @@ export default (app: Router) => {
     async (req: Request, res: Response, next: NextFunction) => {
       const logger: Logger = Container.get('logger');
       try {
-        let { filename, content, path } = req.body as {
+        let { filename, content, path: dirPath } = req.body as {
           filename: string;
           content: string;
           path: string;
         };
-        const filePath = join(config.scriptPath, path, filename);
+        const targetDir = dirPath
+          ? path.resolve(config.scriptPath, dirPath)
+          : config.scriptPath;
+        if (!isPathUnderDir(targetDir, config.scriptPath)) {
+          return res.send({ code: 430, message: '文件路径禁止访问' });
+        }
+        const safeFilename = safeName(filename);
+        const filePath = path.resolve(targetDir, safeFilename);
+        if (!isPathUnderDir(filePath, config.scriptPath)) {
+          return res.send({ code: 430, message: '文件路径禁止访问' });
+        }
         await writeFileWithLock(filePath, content);
         return res.send({ code: 200 });
       } catch (e) {
@@ -203,12 +226,22 @@ export default (app: Router) => {
     async (req: Request, res: Response, next: NextFunction) => {
       const logger: Logger = Container.get('logger');
       try {
-        let { filename, path, type } = req.body as {
+        let { filename, path: dirPath, type } = req.body as {
           filename: string;
           path: string;
           type: string;
         };
-        const filePath = join(config.scriptPath, path, filename);
+        const targetDir = dirPath
+          ? path.resolve(config.scriptPath, dirPath)
+          : config.scriptPath;
+        if (!isPathUnderDir(targetDir, config.scriptPath)) {
+          return res.send({ code: 430, message: '文件路径禁止访问' });
+        }
+        const safeFilename = safeName(filename);
+        const filePath = path.resolve(targetDir, safeFilename);
+        if (!isPathUnderDir(filePath, config.scriptPath)) {
+          return res.send({ code: 430, message: '文件路径禁止访问' });
+        }
         await rmPath(filePath);
         res.send({ code: 200 });
       } catch (e) {
@@ -230,7 +263,11 @@ export default (app: Router) => {
         let { filename } = req.body as {
           filename: string;
         };
-        const filePath = join(config.scriptPath, filename);
+        const safeFilename = safeName(filename);
+        const filePath = path.resolve(config.scriptPath, safeFilename);
+        if (!isPathUnderDir(filePath, config.scriptPath)) {
+          return res.send({ code: 430, message: '文件路径禁止访问' });
+        }
         // const stats = fs.statSync(filePath);
         // res.set({
         //   'Content-Type': 'application/octet-stream', //告诉浏览器这是一个二进制文件
@@ -259,9 +296,22 @@ export default (app: Router) => {
     async (req: Request, res: Response, next: NextFunction) => {
       const logger: Logger = Container.get('logger');
       try {
-        let { filename, content, path } = req.body;
-        const { name, ext } = parse(filename);
-        const filePath = join(config.scriptPath, path, `${name}.swap${ext}`);
+        let { filename, content, path: dirPath } = req.body;
+        const safeFilename = safeName(filename);
+        const { name, ext } = parse(safeFilename);
+        const targetDir = dirPath
+          ? path.resolve(config.scriptPath, dirPath)
+          : config.scriptPath;
+        if (!isPathUnderDir(targetDir, config.scriptPath)) {
+          return res.send({ code: 430, message: '文件路径禁止访问' });
+        }
+        const filePath = path.resolve(
+          targetDir,
+          `${name}.swap${ext}`,
+        );
+        if (!isPathUnderDir(filePath, config.scriptPath)) {
+          return res.send({ code: 430, message: '文件路径禁止访问' });
+        }
         await writeFileWithLock(filePath, content || '');
 
         const scriptService = Container.get(ScriptService);
@@ -284,10 +334,30 @@ export default (app: Router) => {
     }),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        let { filename, path, pid } = req.body;
-        const { name, ext } = parse(filename);
-        const filePath = join(config.scriptPath, path, `${name}.swap${ext}`);
-        const logPath = join(config.logPath, path, `${name}.swap`);
+        let { filename, path: dirPath, pid } = req.body;
+        const safeFilename = safeName(filename);
+        const { name, ext } = parse(safeFilename);
+        const targetDir = dirPath
+          ? path.resolve(config.scriptPath, dirPath)
+          : config.scriptPath;
+        if (!isPathUnderDir(targetDir, config.scriptPath)) {
+          return res.send({ code: 430, message: '文件路径禁止访问' });
+        }
+        const filePath = path.resolve(
+          targetDir,
+          `${name}.swap${ext}`,
+        );
+        const logPath = path.resolve(
+          config.logPath,
+          dirPath || '',
+          `${name}.swap`,
+        );
+        if (
+          !isPathUnderDir(filePath, config.scriptPath) ||
+          !isPathUnderDir(logPath, config.logPath)
+        ) {
+          return res.send({ code: 430, message: '文件路径禁止访问' });
+        }
 
         const scriptService = Container.get(ScriptService);
         const result = await scriptService.stopScript(filePath, pid);
@@ -312,14 +382,28 @@ export default (app: Router) => {
     }),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        let { filename, path, type, newFilename } = req.body as {
+        let { filename, path: dirPath, type, newFilename } = req.body as {
           filename: string;
           path: string;
           type: string;
           newFilename: string;
         };
-        const filePath = join(config.scriptPath, path, filename);
-        const newPath = join(config.scriptPath, path, newFilename);
+        const targetDir = dirPath
+          ? path.resolve(config.scriptPath, dirPath)
+          : config.scriptPath;
+        if (!isPathUnderDir(targetDir, config.scriptPath)) {
+          return res.send({ code: 430, message: '文件路径禁止访问' });
+        }
+        const safeFilename = safeName(filename);
+        const safeNewFilename = safeName(newFilename);
+        const filePath = path.resolve(targetDir, safeFilename);
+        const newPath = path.resolve(targetDir, safeNewFilename);
+        if (
+          !isPathUnderDir(filePath, config.scriptPath) ||
+          !isPathUnderDir(newPath, config.scriptPath)
+        ) {
+          return res.send({ code: 430, message: '文件路径禁止访问' });
+        }
         await fs.rename(filePath, newPath);
         res.send({ code: 200 });
       } catch (e) {
