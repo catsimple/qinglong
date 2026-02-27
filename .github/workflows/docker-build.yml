@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '自定义镜像标签 (例如: 2.18.0_fix)'
+        description: '自定义镜像标签'
         required: true
         default: '2.18.0_fix'
       push_latest:
-        description: '是否同时设置为 latest?'
+        description: '是否设置为 latest?'
         type: boolean
         required: false
         default: false
@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 获取完整历史，确保能够读取到提交哈希
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -35,16 +37,12 @@ jobs:
           node-version: "18"
           cache: "pnpm"
 
-      # 这一步非常重要：官方 Dockerfile 通常直接拷贝编译后的文件
-      # 如果不先运行 build，Docker 镜像内可能缺少前端界面
+      # 非常关键：在打包 Docker 镜像前，先在宿主机生成编译产物
       - name: Build front and back
         run: |
           pnpm install --frozen-lockfile
           pnpm build:front
           pnpm build:back
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -68,22 +66,17 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
+          # context 设为 . 表示将当前目录所有文件发送给 Docker 守护进程
           context: .
           file: ./docker/Dockerfile
           build-args: |
-            # 1. 显式指定维护者为你自己
             QL_MAINTAINER=${{ github.repository_owner }}
-            
-            # 2. 显式指定源码地址为你自己的 fork 仓库
-            QL_URL=https://github.com/${{ github.repository }}
-            
-            # 3. 指定分支（github.ref_name 会自动获取当前触发的分支名，即 2.18.0_fix）
             QL_BRANCH=${{ github.ref_name }}
-            
-            # 4. 提交哈希
             SOURCE_COMMIT=${{ github.sha }}
-          
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # 建议加上缓存，加快后续构建速度
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
