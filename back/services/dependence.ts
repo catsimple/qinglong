@@ -12,6 +12,7 @@ import {
   versionDependenceCommandTypes,
 } from '../data/dependence';
 import { spawn } from 'cross-spawn';
+import fs from 'fs/promises';
 import SockService from './sock';
 import { FindOptions, Op } from 'sequelize';
 import {
@@ -298,18 +299,11 @@ export default class DependenceService {
             return resolve(null);
           }
         }
-        const dependenceProxyFileExist = await fileExist(
-          config.dependenceProxyFile,
-        );
-        const proxyStr = dependenceProxyFileExist
-          ? `source ${config.dependenceProxyFile} &&`
-          : '';
-        const cp = spawn(
-          `${proxyStr} ${depRunCommand} ${dependency.name.trim()}`,
-          {
-            shell: '/bin/bash',
-          },
-        );
+        const proxyEnv = await this.getProxyEnv();
+        const { cmd, args } = this.parseCommand(depRunCommand);
+        const cp = spawn(cmd, [...args, dependency.name.trim()], {
+          env: { ...process.env, ...proxyEnv },
+        });
 
         cp.stdout.on('data', async (data) => {
           this.sockService.sendMessage({
@@ -384,5 +378,34 @@ export default class DependenceService {
         });
       });
     });
+  }
+
+  private parseCommand(command: string): { cmd: string; args: string[] } {
+    const parts = command.trim().split(/\s+/);
+    const [cmd, ...args] = parts;
+    return { cmd, args };
+  }
+
+  private async getProxyEnv(): Promise<Record<string, string>> {
+    const env: Record<string, string> = {};
+    const dependenceProxyFileExist = await fileExist(config.dependenceProxyFile);
+    if (!dependenceProxyFileExist) {
+      return env;
+    }
+    try {
+      const content = await fs.readFile(config.dependenceProxyFile, 'utf8');
+      const lines = content.split(/\r?\n/);
+      for (const line of lines) {
+        const match = line.match(
+          /^\s*export\s+(https?_proxy)\s*=\s*["']?([^"']+)["']?\s*$/i,
+        );
+        if (match) {
+          env[match[1]] = match[2];
+        }
+      }
+    } catch {
+      // ignore proxy file read errors
+    }
+    return env;
   }
 }

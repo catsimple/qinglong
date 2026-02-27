@@ -150,6 +150,9 @@ export default class SystemService {
     });
     let cmd = 'pnpm config delete registry';
     if (info.nodeMirror) {
+      if (!this.isSafeHttpUrl(info.nodeMirror)) {
+        throw new Error('非法镜像地址');
+      }
       cmd = `pnpm config set registry ${info.nodeMirror}`;
     }
     let command = `cd && ${cmd}`;
@@ -196,11 +199,21 @@ export default class SystemService {
       ...oDoc,
       info: { ...oDoc.info, ...info },
     });
-    let cmd = 'pip config unset global.index-url';
-    if (info.pythonMirror) {
-      cmd = `pip3 config set global.index-url ${info.pythonMirror}`;
+    if (info.pythonMirror && !this.isSafeHttpUrl(info.pythonMirror)) {
+      return { code: 400, message: '非法镜像地址' };
     }
-    await promiseExec(cmd);
+    const args = info.pythonMirror
+      ? ['config', 'set', 'global.index-url', info.pythonMirror]
+      : ['config', 'unset', 'global.index-url'];
+    try {
+      try {
+        await this.runCommand('pip3', args);
+      } catch {
+        await this.runCommand('pip', args);
+      }
+    } catch (error: any) {
+      return { code: 400, message: error?.message || '命令执行失败' };
+    }
     return { code: 200, data: info };
   }
 
@@ -227,43 +240,49 @@ export default class SystemService {
       defaultDomain = domainMatch[1];
     }
     if (info.linuxMirror) {
+      if (!this.isSafeHttpUrl(info.linuxMirror)) {
+        throw new Error('非法镜像地址');
+      }
       targetDomain = info.linuxMirror;
     }
-    const command = `sed -i 's/${defaultDomain.replace(
-      /\//g,
-      '\\/',
-    )}/${targetDomain.replace(
-      /\//g,
-      '\\/',
-    )}/g' /etc/apk/repositories && apk update -f`;
+    const escaped = defaultDomain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const replaced = content.replace(new RegExp(escaped, 'g'), targetDomain);
+    if (replaced !== content) {
+      await fs.promises.writeFile('/etc/apk/repositories', replaced, {
+        encoding: 'utf-8',
+      });
+    }
 
-    this.scheduleService.runTask(
-      command,
-      {
-        onStart: async (cp) => {
-          res?.setHeader('QL-Task-Pid', `${cp.pid}`);
-          res?.end();
-        },
-        onEnd: async () => {
-          this.sockService.sendMessage({
-            type: 'updateLinuxMirror',
-            message: 'update linux mirror end',
-          });
-          onEnd?.();
-        },
-        onError: async (message: string) => {
-          this.sockService.sendMessage({ type: 'updateLinuxMirror', message });
-        },
-        onLog: async (message: string) => {
-          this.sockService.sendMessage({ type: 'updateLinuxMirror', message });
-        },
-      },
-      {
-        command,
-        id: 'update-linux-mirror',
-        runOrigin: 'system',
-      },
-    );
+    const cp = spawn('apk', ['update', '-f']);
+    res?.setHeader('QL-Task-Pid', `${cp.pid}`);
+    res?.end();
+
+    cp.stdout.on('data', (data) => {
+      this.sockService.sendMessage({
+        type: 'updateLinuxMirror',
+        message: data.toString(),
+      });
+    });
+    cp.stderr.on('data', (data) => {
+      this.sockService.sendMessage({
+        type: 'updateLinuxMirror',
+        message: data.toString(),
+      });
+    });
+    cp.on('error', (err) => {
+      this.sockService.sendMessage({
+        type: 'updateLinuxMirror',
+        message: JSON.stringify(err),
+      });
+      onEnd?.();
+    });
+    cp.on('exit', () => {
+      this.sockService.sendMessage({
+        type: 'updateLinuxMirror',
+        message: 'update linux mirror end',
+      });
+      onEnd?.();
+    });
   }
 
   public async checkUpdate() {
@@ -402,9 +421,15 @@ export default class SystemService {
 
   public async exportData(res: Response) {
     try {
-      await promiseExec(
-        `cd ${config.dataPath} && cd ../ && tar -zcvf ${config.dataTgzFile} data/`,
-      );
+      const parentDir = path.dirname(config.dataPath);
+      const baseName = path.basename(config.dataPath);
+      await this.runCommand('tar', [
+        '-zcvf',
+        config.dataTgzFile,
+        '-C',
+        parentDir,
+        `${baseName}/`,
+      ]);
       res.download(config.dataTgzFile);
     } catch (error: any) {
       return res.send({ code: 400, message: error.message });
@@ -413,10 +438,17 @@ export default class SystemService {
 
   public async importData() {
     try {
-      await promiseExec(`rm -rf ${path.join(config.tmpPath, 'data')}`);
-      const res = await promiseExec(
-        `cd ${config.tmpPath} && tar -zxvf ${config.dataTgzFile}`,
-      );
+      await fs.promises.rm(path.join(config.tmpPath, 'data'), {
+        recursive: true,
+        force: true,
+      });
+      await this.ensureSafeTar(config.dataTgzFile);
+      const res = await this.runCommand('tar', [
+        '-zxvf',
+        config.dataTgzFile,
+        '-C',
+        config.tmpPath,
+      ]);
       return { code: 200, data: res };
     } catch (error: any) {
       return { code: 400, message: error.message };
@@ -469,6 +501,65 @@ export default class SystemService {
     const logs = result.reverse().filter((x) => x.title.endsWith('.log'));
     for (const log of logs) {
       await rmPath(path.join(config.systemLogPath, log.title));
+    }
+  }
+
+  private isSafeHttpUrl(value: string) {
+    try {
+      const url = new URL(value);
+      if (!['http:', 'https:'].includes(url.protocol)) {
+        return false;
+      }
+      return !/[\\s"'`$;&|<>]/.test(value);
+    } catch {
+      return false;
+    }
+  }
+
+  private async runCommand(command: string, args: string[]) {
+    return await new Promise<string>((resolve, reject) => {
+      const cp = spawn(command, args);
+      let stdout = '';
+      let stderr = '';
+      cp.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+      cp.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+      cp.on('error', (err) => reject(err));
+      cp.on('close', (code) => {
+        if (code === 0) {
+          resolve(stdout || stderr);
+        } else {
+          reject(new Error(stderr || stdout || 'command failed'));
+        }
+      });
+    });
+  }
+
+  private async ensureSafeTar(archivePath: string) {
+    const list = await this.runCommand('tar', ['-tzvf', archivePath]);
+    const lines = list.split(/\r?\n/).filter(Boolean);
+    for (const line of lines) {
+      const type = line.trim()[0];
+      const parts = line.trim().split(/\s+/);
+      const filePath = parts[parts.length - 1];
+      const normalized = path.posix.normalize(filePath);
+      if (type === 'l' || type === 'L') {
+        throw new Error('tar contains symlink');
+      }
+      if (
+        path.posix.isAbsolute(normalized) ||
+        normalized.startsWith('..') ||
+        normalized.includes('..' + path.posix.sep) ||
+        normalized.includes('\\')
+      ) {
+        throw new Error('tar contains unsafe path');
+      }
+      if (normalized !== 'data' && !normalized.startsWith('data/')) {
+        throw new Error('tar contains unexpected root');
+      }
     }
   }
 }

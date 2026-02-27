@@ -16,7 +16,8 @@ const storage = multer.diskStorage({
     cb(null, config.scriptPath);
   },
   filename: function (req, file, cb) {
-    cb(null, file.originalname);
+    const safeFilename = file.originalname.replace(/[\\/]/g, '');
+    cb(null, safeFilename);
   },
 });
 const upload = multer({ storage: storage });
