@@ -1,0 +1,80 @@
+name: Manual Build and Push to GHCR
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '自定义镜像标签 (例如: 2.18.0_fix)'
+        required: true
+        default: '2.18.0_fix'
+      push_latest:
+        description: '是否同时设置为 latest?'
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    permissions:
+      packages: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "8.3.1"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "pnpm"
+
+      # 这一步非常重要：官方 Dockerfile 通常直接拷贝编译后的文件
+      # 如果不先运行 build，Docker 镜像内可能缺少前端界面
+      - name: Build front and back
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build:front
+          pnpm build:back
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ github.event.inputs.tag }}
+            type=raw,value=latest,enable=${{ github.event.inputs.push_latest }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          build-args: |
+            MAINTAINER=${{ github.repository_owner }}
+            QL_BRANCH=${{ github.ref_name }}
+            SOURCE_COMMIT=${{ github.sha }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
