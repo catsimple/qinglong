@@ -59,7 +59,7 @@ export default (app: Router) => {
       try {
         const cronViewService = Container.get(CronViewService);
         if (req.body.type === 1) {
-          return res.send({ code: 400, message: '鍙傛暟閿欒' });
+          return res.send({ code: 400, message: '参数错误' });
         } else {
           const data = await cronViewService.update(req.body);
           return res.send({ code: 200, data });
@@ -147,7 +147,7 @@ export default (app: Router) => {
       const data = await cronService.crontabs(req.query as any);
       return res.send({ code: 200, data });
     } catch (e) {
-      logger.error('馃敟 error: %o', e);
+      logger.error('🔥 error: %o', e);
       return next(e);
     }
   });
@@ -161,7 +161,7 @@ export default (app: Router) => {
         const data = await cronService.find(req.query as any);
         return res.send({ code: 200, data });
       } catch (e) {
-        logger.error('馃敟 error: %o', e);
+        logger.error('🔥 error: %o', e);
         return next(e);
       }
     },

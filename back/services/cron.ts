@@ -491,7 +491,7 @@ export default class CronService {
         }
 
         this.logger.info(
-          `[panel][寮€濮嬫墽琛屼换鍔 鍙傛暟: ${JSON.stringify(params)}`,
+          `[panel][开始执行任务] 参数: ${JSON.stringify(params)}`,
         );
 
         let { id, command, log_path } = cron;
@@ -534,7 +534,7 @@ export default class CronService {
         });
         cp.stderr.on('data', async (data) => {
           this.logger.info(
-            '[panel][鎵ц浠诲姟澶辫触] 鍛戒护: %s, 閿欒淇℃伅: %j',
+            '[panel][执行任务失败] 命令:%s, 错误信息: %j',
             command,
             data.toString(),
           );
@@ -542,7 +542,7 @@ export default class CronService {
         });
         cp.on('error', async (err) => {
           this.logger.error(
-            '[panel][鍒涘缓浠诲姟澶辫触] 鍛戒护: %s, 閿欒淇℃伅: %j',
+            '[panel][创建任务失败] 命令: %s, 错误信息: %j',
             command,
             err,
           );
@@ -553,7 +553,7 @@ export default class CronService {
         cp.on('exit', async (code) => {
           await this.closeStream(logStream);
           this.logger.info(
-            '[panel][鎵ц浠诲姟缁撴潫] 鍙傛暟: %s, 閫€鍑虹爜: %j',
+            '[panel][执行任务结束] 参数: %s, 退出码: %j',
             JSON.stringify(params),
             code,
           );
