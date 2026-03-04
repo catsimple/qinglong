@@ -3,11 +3,19 @@ import taskLimit from './pLimit';
 import Logger from '../loaders/logger';
 import { ICron } from '../protos/cron';
 
-export function runCron(cmd: string, cron: ICron): Promise<number | void> {
-  return taskLimit.runWithCronLimit(cron, () => {
+interface IRunCronOptions {
+  manual?: boolean;
+}
+
+export function runCron(
+  cmd: string,
+  cron: ICron,
+  options: IRunCronOptions = {},
+): Promise<number | void> {
+  const runTask = () => {
     return new Promise(async (resolve: any) => {
       Logger.info(
-        `[schedule][开始执行任务] 参数 ${JSON.stringify({
+        `[schedule][start run cron] params ${JSON.stringify({
           ...cron,
           command: cmd,
         })}`,
@@ -16,23 +24,25 @@ export function runCron(cmd: string, cron: ICron): Promise<number | void> {
 
       cp.stderr.on('data', (data) => {
         Logger.info(
-          '[schedule][执行任务失败] 命令: %s, 错误信息: %j',
+          '[schedule][run cron stderr] command: %s, stderr: %j',
           cmd,
           data.toString(),
         );
       });
       cp.on('error', (err) => {
         Logger.error(
-          '[schedule][创建任务失败] 命令: %s, 错误信息: %j',
+          '[schedule][run cron spawn error] command: %s, error: %j',
           cmd,
           err,
         );
       });
 
       cp.on('exit', async (code) => {
-        taskLimit.removeQueuedCron(cron.id);
+        if (!options.manual) {
+          taskLimit.removeQueuedCron(cron.id);
+        }
         Logger.info(
-          '[schedule][执行任务结束] 参数: %s, 退出码: %j',
+          '[schedule][run cron finished] params: %s, exitCode: %j',
           JSON.stringify({
             ...cron,
             command: cmd,
@@ -42,5 +52,10 @@ export function runCron(cmd: string, cron: ICron): Promise<number | void> {
         resolve({ ...cron, command: cmd, pid: cp.pid, code });
       });
     });
-  });
+  };
+
+  if (options.manual) {
+    return taskLimit.manualRunWithCronLimit(runTask);
+  }
+  return taskLimit.runWithCronLimit(cron, runTask);
 }

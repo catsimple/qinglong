@@ -20,4 +20,50 @@ export const sequelize = new Sequelize({
   transactionType: Transaction.TYPES.IMMEDIATE,
 });
 
+const SQLITE_JOURNAL_MODES = new Set([
+  'DELETE',
+  'TRUNCATE',
+  'PERSIST',
+  'MEMORY',
+  'WAL',
+  'OFF',
+]);
+const SQLITE_SYNCHRONOUS_LEVELS = new Set(['OFF', 'NORMAL', 'FULL', 'EXTRA']);
+
+export async function applySqlitePragmas() {
+  const journalMode = (
+    process.env.SQLITE_JOURNAL_MODE || 'WAL'
+  ).toUpperCase();
+  const synchronous = (
+    process.env.SQLITE_SYNCHRONOUS || 'NORMAL'
+  ).toUpperCase();
+  const busyTimeout = Math.floor(
+    Math.max(Number(process.env.SQLITE_BUSY_TIMEOUT_MS || 5000), 0),
+  );
+  const cacheSize = Math.trunc(Number(process.env.SQLITE_CACHE_SIZE || -16000));
+
+  const safeJournalMode = SQLITE_JOURNAL_MODES.has(journalMode)
+    ? journalMode
+    : 'WAL';
+  const safeSynchronous = SQLITE_SYNCHRONOUS_LEVELS.has(synchronous)
+    ? synchronous
+    : 'NORMAL';
+
+  const runPragma = async (query: string) => {
+    try {
+      await sequelize.query(query);
+    } catch (error) {}
+  };
+
+  await runPragma(`PRAGMA journal_mode=${safeJournalMode}`);
+  await runPragma(`PRAGMA synchronous=${safeSynchronous}`);
+  await runPragma(`PRAGMA temp_store=MEMORY`);
+  if (busyTimeout > 0) {
+    await runPragma(`PRAGMA busy_timeout=${busyTimeout}`);
+  }
+  if (!isNaN(cacheSize) && cacheSize !== 0) {
+    await runPragma(`PRAGMA cache_size=${cacheSize}`);
+  }
+}
+
 export type ResponseType<T> = { code: number; data?: T; message?: string };

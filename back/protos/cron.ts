@@ -41,6 +41,13 @@ export interface DeleteCronRequest {
 export interface DeleteCronResponse {
 }
 
+export interface RunCronRequest {
+  crons: ICron[];
+}
+
+export interface RunCronResponse {
+}
+
 function createBaseISchedule(): ISchedule {
   return { schedule: "" };
 }
@@ -421,6 +428,110 @@ export const DeleteCronResponse = {
   },
 };
 
+function createBaseRunCronRequest(): RunCronRequest {
+  return { crons: [] };
+}
+
+export const RunCronRequest = {
+  encode(message: RunCronRequest, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    for (const v of message.crons) {
+      ICron.encode(v!, writer.uint32(10).fork()).ldelim();
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): RunCronRequest {
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseRunCronRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          if (tag !== 10) {
+            break;
+          }
+
+          message.crons.push(ICron.decode(reader, reader.uint32()));
+          continue;
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skipType(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): RunCronRequest {
+    return { crons: Array.isArray(object?.crons) ? object.crons.map((e: any) => ICron.fromJSON(e)) : [] };
+  },
+
+  toJSON(message: RunCronRequest): unknown {
+    const obj: any = {};
+    if (message.crons) {
+      obj.crons = message.crons.map((e) => e ? ICron.toJSON(e) : undefined);
+    } else {
+      obj.crons = [];
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RunCronRequest>, I>>(base?: I): RunCronRequest {
+    return RunCronRequest.fromPartial(base ?? {});
+  },
+
+  fromPartial<I extends Exact<DeepPartial<RunCronRequest>, I>>(object: I): RunCronRequest {
+    const message = createBaseRunCronRequest();
+    message.crons = object.crons?.map((e) => ICron.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseRunCronResponse(): RunCronResponse {
+  return {};
+}
+
+export const RunCronResponse = {
+  encode(_: RunCronResponse, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): RunCronResponse {
+    const reader = input instanceof _m0.Reader ? input : _m0.Reader.create(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseRunCronResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skipType(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(_: any): RunCronResponse {
+    return {};
+  },
+
+  toJSON(_: RunCronResponse): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RunCronResponse>, I>>(base?: I): RunCronResponse {
+    return RunCronResponse.fromPartial(base ?? {});
+  },
+
+  fromPartial<I extends Exact<DeepPartial<RunCronResponse>, I>>(_: I): RunCronResponse {
+    const message = createBaseRunCronResponse();
+    return message;
+  },
+};
+
 export type CronService = typeof CronService;
 export const CronService = {
   addCron: {
@@ -441,11 +552,21 @@ export const CronService = {
     responseSerialize: (value: DeleteCronResponse) => Buffer.from(DeleteCronResponse.encode(value).finish()),
     responseDeserialize: (value: Buffer) => DeleteCronResponse.decode(value),
   },
+  runCron: {
+    path: "/com.ql.cron.Cron/runCron",
+    requestStream: false,
+    responseStream: false,
+    requestSerialize: (value: RunCronRequest) => Buffer.from(RunCronRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer) => RunCronRequest.decode(value),
+    responseSerialize: (value: RunCronResponse) => Buffer.from(RunCronResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer) => RunCronResponse.decode(value),
+  },
 } as const;
 
 export interface CronServer extends UntypedServiceImplementation {
   addCron: handleUnaryCall<AddCronRequest, AddCronResponse>;
   delCron: handleUnaryCall<DeleteCronRequest, DeleteCronResponse>;
+  runCron: handleUnaryCall<RunCronRequest, RunCronResponse>;
 }
 
 export interface CronClient extends Client {
@@ -478,6 +599,21 @@ export interface CronClient extends Client {
     metadata: Metadata,
     options: Partial<CallOptions>,
     callback: (error: ServiceError | null, response: DeleteCronResponse) => void,
+  ): ClientUnaryCall;
+  runCron(
+    request: RunCronRequest,
+    callback: (error: ServiceError | null, response: RunCronResponse) => void,
+  ): ClientUnaryCall;
+  runCron(
+    request: RunCronRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: RunCronResponse) => void,
+  ): ClientUnaryCall;
+  runCron(
+    request: RunCronRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: RunCronResponse) => void,
   ): ClientUnaryCall;
 }
 

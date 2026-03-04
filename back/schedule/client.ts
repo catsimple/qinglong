@@ -5,6 +5,8 @@ import {
   CronClient,
   DeleteCronRequest,
   DeleteCronResponse,
+  RunCronRequest,
+  RunCronResponse,
 } from '../protos/cron';
 import config from '../config';
 
@@ -20,6 +22,7 @@ class Client {
       this.client.addCron({ crons: request }, (err, res) => {
         if (err) {
           reject(err);
+          return;
         }
         resolve(res);
       });
@@ -31,6 +34,19 @@ class Client {
       this.client.delCron({ ids: request }, (err, res) => {
         if (err) {
           reject(err);
+          return;
+        }
+        resolve(res);
+      });
+    });
+  }
+
+  runCron(request: RunCronRequest['crons']): Promise<RunCronResponse> {
+    return new Promise((resolve, reject) => {
+      this.client.runCron({ crons: request }, (err, res) => {
+        if (err) {
+          reject(err);
+          return;
         }
         resolve(res);
       });

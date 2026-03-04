@@ -10,10 +10,12 @@ import { fileExist } from '../config/util';
 import { SubscriptionModel } from '../data/subscription';
 import { CrontabViewModel } from '../data/cronView';
 import config from '../config';
-import { sequelize } from '../data';
+import { applySqlitePragmas, sequelize } from '../data';
 
 export default async () => {
   try {
+    await applySqlitePragmas();
+
     await CrontabModel.sync();
     await DependenceModel.sync();
     await AppModel.sync();
@@ -58,6 +60,17 @@ export default async () => {
     try {
       await sequelize.query('alter table Crontabs add column task_after TEXT');
     } catch (error) { }
+
+    try {
+      await sequelize.query(
+        'create index if not exists idx_crontabs_pin_disable_status_created on Crontabs (isPinned, isDisabled, status, createdAt)',
+      );
+    } catch (error) {}
+    try {
+      await sequelize.query(
+        'create index if not exists idx_crontabs_log_path on Crontabs (log_path)',
+      );
+    } catch (error) {}
 
     // 2.10-2.11 升级
     const cronDbFile = path.join(config.rootPath, 'db/crontab.db');
