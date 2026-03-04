@@ -90,7 +90,7 @@ const Dependence = () => {
     ws.subscribe('updateLinuxMirror', handleMessage);
 
     return () => {
-      ws.subscribe('updateNodeMirror', handleMessage);
+      ws.unsubscribe('updateNodeMirror', handleMessage);
       ws.unsubscribe('updateLinuxMirror', handleMessage);
     };
   }, []);

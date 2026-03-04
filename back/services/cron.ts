@@ -525,12 +525,19 @@ export default class CronService {
           { where: { id } },
         );
 
+        let logOffset = 0;
         const pushLog = (message: string) => {
+          const startOffset = logOffset;
+          const nextOffset = startOffset + Buffer.byteLength(message, 'utf8');
+          logOffset = nextOffset;
           this.writeStreamLog(logStream, message);
           this.sockService.sendMessage({
             type: 'cronLog',
             message,
             references: [id],
+            log_path: logPath,
+            offset: startOffset,
+            nextOffset,
           });
         };
 

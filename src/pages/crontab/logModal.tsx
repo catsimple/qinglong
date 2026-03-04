@@ -23,6 +23,14 @@ interface ILogChunkResponse {
   log_path: string;
 }
 
+interface ICronWsPayload {
+  message?: string;
+  references?: number[];
+  log_path?: string;
+  offset?: number;
+  nextOffset?: number;
+}
+
 const CronLogModal = ({
   cron,
   handleCancel,
@@ -133,7 +141,7 @@ const CronLogModal = ({
           logPathRef.current = chunk.log_path;
         }
 
-        offsetRef.current = chunk.nextOffset || 0;
+        offsetRef.current = Math.max(offsetRef.current, chunk.nextOffset || 0);
 
         if (chunk.content) {
           appendLog(chunk.content);
@@ -180,15 +188,49 @@ const CronLogModal = ({
   };
 
   const handleWsLog = useCallback(
-    (payload: { message?: string; references?: number[] }) => {
+    (payload: ICronWsPayload) => {
       if (!visible || !cron?.id || logUrl) {
         return;
       }
-      const { message = '', references = [] } = payload;
+      const {
+        message = '',
+        references = [],
+        log_path,
+        offset,
+        nextOffset,
+      } = payload;
       if (!message || !references.includes(cron.id)) {
         return;
       }
+
+      if (log_path && logPathRef.current && log_path !== logPathRef.current) {
+        logPathRef.current = log_path;
+        offsetRef.current = 0;
+        logTextRef.current = emptyTip;
+        setValue(emptyTip);
+        scheduleNext(0);
+        return;
+      }
+      if (log_path && !logPathRef.current) {
+        logPathRef.current = log_path;
+      }
+
+      const start = typeof offset === 'number' ? offset : offsetRef.current;
+      const end = typeof nextOffset === 'number'
+        ? nextOffset
+        : start + new TextEncoder().encode(message).length;
+
+      if (end <= offsetRef.current) {
+        return;
+      }
+
+      if (start > offsetRef.current) {
+        scheduleNext(0);
+        return;
+      }
+
       const merged = appendLog(message);
+      offsetRef.current = end;
       setExecuting(!logEnded(merged));
       autoScroll();
     },
@@ -239,12 +281,17 @@ const CronLogModal = ({
   }, [data]);
 
   useEffect(() => {
+    if (!visible || !cron?.id || logUrl) {
+      return;
+    }
     const ws = WebSocketManager.getInstance();
-    ws.subscribe('cronLog', handleWsLog);
+    ws.subscribe('cronLog', handleWsLog, {
+      references: [cron.id],
+    });
     return () => {
       ws.unsubscribe('cronLog', handleWsLog);
     };
-  }, [handleWsLog]);
+  }, [cron?.id, handleWsLog, logUrl, visible]);
 
   useEffect(() => {
     setIsPhone(document.body.clientWidth < 768);

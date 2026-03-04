@@ -9,3 +9,12 @@ export type SockMessageType =
   | 'reloadSystem'
   | 'updateNodeMirror'
   | 'updateLinuxMirror';
+
+export interface SockPayload {
+  type: SockMessageType;
+  message?: string;
+  references?: number[];
+  log_path?: string;
+  offset?: number;
+  nextOffset?: number;
+}

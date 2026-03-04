@@ -1,11 +1,19 @@
 import SockJS from 'sockjs-client';
-import { SockMessageType } from './type';
+import { SockMessageType, SockPayload } from './type';
+
+type TSubscriptionCallback = (p: any) => void;
+type TSubscriptionMeta = {
+  references?: number[];
+};
 
 class WebSocketManager {
   private static instance: WebSocketManager | null = null;
   private url: string;
   private socket: WebSocket | null = null;
-  private subscriptions: Map<SockMessageType, Set<(p: any) => void>> = new Map();
+  private subscriptions: Map<
+    SockMessageType,
+    Map<TSubscriptionCallback, TSubscriptionMeta>
+  > = new Map();
   private options: {
     maxReconnectAttempts: number;
     reconnectInterval: number;
@@ -59,12 +67,21 @@ class WebSocketManager {
 
     this.socket.onopen = () => {
       this.state = 'open';
+      this.reconnectAttempts = 0;
+      this.resubscribeAll();
       this.emit('open');
     };
 
     this.socket.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      this.dispatchMessage(message);
+      try {
+        const message = JSON.parse(event.data) as SockPayload;
+        if (!message?.type) {
+          return;
+        }
+        this.dispatchMessage(message);
+      } catch (error) {
+        this.handleError(error);
+      }
     };
 
     this.socket.onclose = () => {
@@ -79,26 +96,54 @@ class WebSocketManager {
     }
   }
 
-  public subscribe(topic: SockMessageType, callback: (v: any) => void) {
-    const topicSubscriptions = this.subscriptions.get(topic) || new Set();
+  public subscribe(
+    topic: SockMessageType,
+    callback: (v: any) => void,
+    options?: { references?: number[] },
+  ) {
+    const topicSubscriptions = this.subscriptions.get(topic) || new Map();
 
     if (!topicSubscriptions.has(callback)) {
-      topicSubscriptions.add(callback);
+      topicSubscriptions.set(callback, {
+        references: options?.references,
+      });
       this.subscriptions.set(topic, topicSubscriptions);
 
-      const subscriptionMessage = { action: 'subscribe', topic };
+      const subscriptionMessage = {
+        action: 'subscribe',
+        topic,
+        references: options?.references,
+      };
       this.send(subscriptionMessage);
     }
   }
 
   public unsubscribe(topic: SockMessageType, callback: (v: any) => void) {
-    const topicSubscriptions = this.subscriptions.get(topic) || new Set();
-    if (topicSubscriptions.has(callback)) {
-      topicSubscriptions.delete(callback);
-
-      const unsubscribeMessage = { action: 'unsubscribe', topic };
-      this.send(unsubscribeMessage);
+    const topicSubscriptions = this.subscriptions.get(topic);
+    if (!topicSubscriptions || !topicSubscriptions.has(callback)) {
+      return;
     }
+
+    topicSubscriptions.delete(callback);
+
+    if (topicSubscriptions.size === 0) {
+      this.subscriptions.delete(topic);
+      this.send({
+        action: 'unsubscribe',
+        topic,
+      });
+      return;
+    }
+
+    // Keep backend subscription state consistent when multiple callbacks share one topic.
+    this.send({ action: 'unsubscribe', topic });
+    topicSubscriptions.forEach((meta) => {
+      this.send({
+        action: 'subscribe',
+        topic,
+        references: meta.references,
+      });
+    });
   }
 
   public send(message: any) {
@@ -107,11 +152,23 @@ class WebSocketManager {
     }
   }
 
-  private dispatchMessage(message: any) {
+  private dispatchMessage(message: SockPayload) {
     const { type, ...others } = message;
-    const topicSubscriptions = this.subscriptions.get(type) || new Set();
+    const topicSubscriptions = this.subscriptions.get(type) || new Map();
 
-    [...topicSubscriptions].forEach((callback) => callback(others));
+    [...topicSubscriptions.keys()].forEach((callback) => callback(others));
+  }
+
+  private resubscribeAll() {
+    this.subscriptions.forEach((callbacks, topic) => {
+      callbacks.forEach((meta) => {
+        this.send({
+          action: 'subscribe',
+          topic,
+          references: meta.references,
+        });
+      });
+    });
   }
 
   private startHeartbeat() {
