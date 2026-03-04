@@ -4,6 +4,7 @@ import config from '../config';
 import { Crontab, CrontabModel, CrontabStatus } from '../data/cron';
 import { exec, execSync } from 'child_process';
 import fs from 'fs/promises';
+import { createWriteStream, WriteStream } from 'fs';
 import cron_parser from 'cron-parser';
 import {
   getFileContentByName,
@@ -22,10 +23,35 @@ import dayjs from 'dayjs';
 import pickBy from 'lodash/pickBy';
 import omit from 'lodash/omit';
 import { writeFileWithLock } from '../shared/utils';
+import SockService from './sock';
+
+interface ILogChunkResult {
+  content: string;
+  offset: number;
+  nextOffset: number;
+  done: boolean;
+  total: number;
+  log_path: string;
+}
 
 @Service()
 export default class CronService {
-  constructor(@Inject('logger') private logger: winston.Logger) {}
+  private readonly crontabApplyDebounceMs = Math.max(
+    Number(process.env.CRONTAB_APPLY_DEBOUNCE_MS || 500),
+    0,
+  );
+  private pendingCrontabData?: { data: Crontab[]; total: number };
+  private crontabApplyWaiters: Array<{
+    resolve: () => void;
+    reject: (error: unknown) => void;
+  }> = [];
+  private crontabApplyTimer: NodeJS.Timeout | null = null;
+  private crontabApplyInFlight: Promise<void> = Promise.resolve();
+
+  constructor(
+    @Inject('logger') private logger: winston.Logger,
+    private sockService: SockService,
+  ) {}
 
   private isNodeCron(cron: Crontab) {
     const { schedule, extra_schedules } = cron;
@@ -104,7 +130,11 @@ export default class CronService {
     last_running_time: number;
     last_execution_time: number;
   }) {
-    let options: any = {
+    if (!ids?.length) {
+      return;
+    }
+
+    const options: Record<string, number | string | undefined> = {
       status,
       pid,
       log_path,
@@ -114,21 +144,50 @@ export default class CronService {
       options.last_running_time = last_running_time;
     }
 
-    for (const id of ids) {
-      let cron;
-      try {
-        cron = await this.getDb({ id });
-      } catch (err) {}
-      if (!cron) {
-        continue;
-      }
-      if (status === CrontabStatus.idle && log_path !== cron.log_path) {
-        options = omit(options, ['status', 'log_path', 'pid']);
-      }
+    if (status !== CrontabStatus.idle || !log_path) {
       await CrontabModel.update(
         { ...pickBy(options, (v) => v === 0 || !!v) },
-        { where: { id } },
+        { where: { id: ids } },
       );
+      return;
+    }
+
+    const docs = await CrontabModel.findAll({
+      where: { id: ids },
+      attributes: ['id', 'log_path'],
+      raw: true,
+    });
+
+    const normalIds: number[] = [];
+    const staleLogIds: number[] = [];
+    docs.forEach((doc) => {
+      if (
+        status === CrontabStatus.idle &&
+        log_path &&
+        doc.log_path &&
+        log_path !== doc.log_path
+      ) {
+        staleLogIds.push(Number(doc.id));
+      } else {
+        normalIds.push(Number(doc.id));
+      }
+    });
+
+    if (normalIds.length) {
+      await CrontabModel.update(
+        { ...pickBy(options, (v) => v === 0 || !!v) },
+        { where: { id: normalIds } },
+      );
+    }
+
+    if (staleLogIds.length) {
+      const staleOptions = omit(options, ['status', 'log_path', 'pid']);
+      if (Object.keys(staleOptions).length) {
+        await CrontabModel.update(
+          { ...pickBy(staleOptions, (v) => v === 0 || !!v) },
+          { where: { id: staleLogIds } },
+        );
+      }
     }
   }
 
@@ -432,7 +491,7 @@ export default class CronService {
         }
 
         this.logger.info(
-          `[panel][开始执行任务] 参数: ${JSON.stringify(params)}`,
+          `[panel][寮€濮嬫墽琛屼换鍔 鍙傛暟: ${JSON.stringify(params)}`,
         );
 
         let { id, command, log_path } = cron;
@@ -444,6 +503,10 @@ export default class CronService {
         }
         const logPath = `${uniqPath}/${logTime}.log`;
         const absolutePath = path.resolve(config.logPath, `${logPath}`);
+        const logStream = createWriteStream(absolutePath, {
+          flags: 'a',
+          encoding: 'utf8',
+        });
         const cp = spawn(
           `real_log_path=${logPath} no_delay=true ${this.makeCommand(
             cron,
@@ -456,29 +519,41 @@ export default class CronService {
           { status: CrontabStatus.running, pid: cp.pid, log_path: logPath },
           { where: { id } },
         );
+
+        const pushLog = (message: string) => {
+          this.writeStreamLog(logStream, message);
+          this.sockService.sendMessage({
+            type: 'cronLog',
+            message,
+            references: [id],
+          });
+        };
+
         cp.stdout.on('data', async (data) => {
-          await fs.appendFile(absolutePath, data.toString());
+          pushLog(data.toString());
         });
         cp.stderr.on('data', async (data) => {
           this.logger.info(
-            '[panel][执行任务失败] 命令: %s, 错误信息: %j',
+            '[panel][鎵ц浠诲姟澶辫触] 鍛戒护: %s, 閿欒淇℃伅: %j',
             command,
             data.toString(),
           );
-          await fs.appendFile(absolutePath, data.toString());
+          pushLog(data.toString());
         });
         cp.on('error', async (err) => {
           this.logger.error(
-            '[panel][创建任务失败] 命令: %s, 错误信息: %j',
+            '[panel][鍒涘缓浠诲姟澶辫触] 鍛戒护: %s, 閿欒淇℃伅: %j',
             command,
             err,
           );
-          await fs.appendFile(absolutePath, JSON.stringify(err));
+          pushLog(JSON.stringify(err));
+          await this.closeStream(logStream);
         });
 
         cp.on('exit', async (code) => {
+          await this.closeStream(logStream);
           this.logger.info(
-            '[panel][执行任务结束] 参数: %s, 退出码: %j',
+            '[panel][鎵ц浠诲姟缁撴潫] 鍙傛暟: %s, 閫€鍑虹爜: %j',
             JSON.stringify(params),
             code,
           );
@@ -529,6 +604,65 @@ export default class CronService {
     }
   }
 
+  public async logChunk(
+    id: number,
+    offset: number = 0,
+    limit: number = 256 * 1024,
+  ): Promise<ILogChunkResult> {
+    const doc = await this.getDb({ id });
+    if (!doc?.log_path) {
+      return {
+        content: '',
+        offset: 0,
+        nextOffset: 0,
+        done: true,
+        total: 0,
+        log_path: '',
+      };
+    }
+
+    const absolutePath = path.resolve(config.logPath, `${doc.log_path}`);
+    const logFileExist = await fileExist(absolutePath);
+    if (!logFileExist) {
+      return {
+        content: '',
+        offset: 0,
+        nextOffset: 0,
+        done: true,
+        total: 0,
+        log_path: doc.log_path,
+      };
+    }
+
+    const stats = await fs.stat(absolutePath);
+    const total = stats.size;
+    const safeOffset = Math.min(Math.max(Number(offset) || 0, 0), total);
+    const safeLimit = Math.min(Math.max(Number(limit) || 256 * 1024, 1024), 1024 * 1024);
+    const nextOffset = Math.min(safeOffset + safeLimit, total);
+    let content = '';
+
+    if (nextOffset > safeOffset) {
+      const file = await fs.open(absolutePath, 'r');
+      try {
+        const length = nextOffset - safeOffset;
+        const buffer = Buffer.alloc(length);
+        await file.read(buffer, 0, length, safeOffset);
+        content = buffer.toString('utf8');
+      } finally {
+        await file.close();
+      }
+    }
+
+    return {
+      content,
+      offset: safeOffset,
+      nextOffset,
+      done: nextOffset >= total,
+      total,
+      log_path: doc.log_path,
+    };
+  }
+
   public async logs(id: number) {
     const doc = await this.getDb({ id });
     if (!doc || !doc.log_path) {
@@ -552,6 +686,21 @@ export default class CronService {
     } else {
       return [];
     }
+  }
+
+  private writeStreamLog(stream: WriteStream, message: string) {
+    if (!stream.destroyed && !stream.writableEnded) {
+      stream.write(message);
+    }
+  }
+
+  private async closeStream(stream: WriteStream) {
+    if (stream.destroyed || stream.writableEnded) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      stream.end(() => resolve());
+    });
   }
 
   private makeCommand(tab: Crontab, realTime?: boolean) {
@@ -579,8 +728,9 @@ export default class CronService {
     return crontab_job_string;
   }
 
-  private async set_crontab(data?: { data: Crontab[]; total: number }) {
-    const tabs = data ?? (await this.crontabs());
+  private async applyCrontabNow(data?: { data: Crontab[]; total: number }) {
+    const tabs = data ?? this.pendingCrontabData ?? (await this.crontabs());
+    this.pendingCrontabData = undefined;
     var crontab_string = '';
     tabs.data.forEach((tab) => {
       const _schedule = tab.schedule && tab.schedule.split(/ +/);
@@ -606,6 +756,44 @@ export default class CronService {
 
     execSync(`crontab ${config.crontabFile}`);
     await CrontabModel.update({ saved: true }, { where: {} });
+  }
+
+  private async set_crontab(data?: { data: Crontab[]; total: number }) {
+    if (data) {
+      this.pendingCrontabData = data;
+    }
+
+    if (this.crontabApplyDebounceMs <= 0) {
+      await this.applyCrontabNow(data);
+      return;
+    }
+
+    return await new Promise<void>((resolve, reject) => {
+      this.crontabApplyWaiters.push({ resolve, reject });
+      if (this.crontabApplyTimer) {
+        clearTimeout(this.crontabApplyTimer);
+      }
+      this.crontabApplyTimer = setTimeout(() => {
+        const waiters = this.crontabApplyWaiters.splice(0);
+        const applyData = this.pendingCrontabData;
+        this.pendingCrontabData = undefined;
+        this.crontabApplyTimer = null;
+
+        this.crontabApplyInFlight = this.crontabApplyInFlight
+          .catch(() => undefined)
+          .then(async () => {
+            await this.applyCrontabNow(applyData);
+          });
+
+        this.crontabApplyInFlight
+          .then(() => {
+            waiters.forEach((item) => item.resolve());
+          })
+          .catch((error) => {
+            waiters.forEach((item) => item.reject(error));
+          });
+      }, this.crontabApplyDebounceMs);
+    });
   }
 
   public import_crontab() {

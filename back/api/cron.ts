@@ -59,7 +59,7 @@ export default (app: Router) => {
       try {
         const cronViewService = Container.get(CronViewService);
         if (req.body.type === 1) {
-          return res.send({ code: 400, message: '参数错误' });
+          return res.send({ code: 400, message: '鍙傛暟閿欒' });
         } else {
           const data = await cronViewService.update(req.body);
           return res.send({ code: 200, data });
@@ -147,7 +147,7 @@ export default (app: Router) => {
       const data = await cronService.crontabs(req.query as any);
       return res.send({ code: 200, data });
     } catch (e) {
-      logger.error('🔥 error: %o', e);
+      logger.error('馃敟 error: %o', e);
       return next(e);
     }
   });
@@ -161,7 +161,7 @@ export default (app: Router) => {
         const data = await cronService.find(req.query as any);
         return res.send({ code: 200, data });
       } catch (e) {
-        logger.error('🔥 error: %o', e);
+        logger.error('馃敟 error: %o', e);
         return next(e);
       }
     },
@@ -320,6 +320,39 @@ export default (app: Router) => {
       try {
         const cronService = Container.get(CronService);
         const data = await cronService.log(req.params.id);
+        return res.send({ code: 200, data });
+      } catch (e) {
+        return next(e);
+      }
+    },
+  );
+
+  route.get(
+    '/:id/log/chunk',
+    celebrate({
+      params: Joi.object({
+        id: Joi.number().required(),
+      }),
+      query: {
+        offset: Joi.number().optional().allow(null),
+        limit: Joi.number().optional().allow(null),
+        t: Joi.string().optional(),
+      },
+    }),
+    async (req: Request<{ id: number }>, res: Response, next: NextFunction) => {
+      try {
+        const cronService = Container.get(CronService);
+        const offset = req.query.offset
+          ? parseInt(req.query.offset as unknown as string, 10)
+          : 0;
+        const limit = req.query.limit
+          ? parseInt(req.query.limit as unknown as string, 10)
+          : 256 * 1024;
+        const data = await cronService.logChunk(
+          req.params.id,
+          offset,
+          limit,
+        );
         return res.send({ code: 200, data });
       } catch (e) {
         return next(e);

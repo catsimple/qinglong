@@ -4,6 +4,7 @@ export type SockMessageType =
   | 'uninstallDependence'
   | 'updateSystemVersion'
   | 'manuallyRunScript'
+  | 'cronLog'
   | 'runSubscriptionEnd'
   | 'reloadSystem'
   | 'updateNodeMirror'

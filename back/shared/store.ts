@@ -18,17 +18,38 @@ export interface IKeyvStore {
 const keyvSqlite = new KeyvSqlite(path.join(config.dbPath, 'keyv.sqlite'));
 export const keyvStore = new Keyv<IKeyvStore>({ store: keyvSqlite });
 
+let authInfoCache: IKeyvStore['authInfo'] | undefined;
+let appsCache: IKeyvStore['apps'] | undefined;
+let authInfoLoaded = false;
+let appsLoaded = false;
+
 export const shareStore = {
-  getAuthInfo() {
-    return keyvStore.get<IKeyvStore['authInfo']>(EKeyv.authInfo);
+  async getAuthInfo() {
+    if (authInfoLoaded) {
+      return authInfoCache;
+    }
+    const value = await keyvStore.get<IKeyvStore['authInfo']>(EKeyv.authInfo);
+    authInfoCache = value;
+    authInfoLoaded = true;
+    return value;
   },
   updateAuthInfo(value: IKeyvStore['authInfo']) {
+    authInfoCache = value;
+    authInfoLoaded = true;
     return keyvStore.set<IKeyvStore['authInfo']>(EKeyv.authInfo, value);
   },
-  getApps() {
-    return keyvStore.get<IKeyvStore['apps']>(EKeyv.apps);
+  async getApps() {
+    if (appsLoaded) {
+      return appsCache;
+    }
+    const value = await keyvStore.get<IKeyvStore['apps']>(EKeyv.apps);
+    appsCache = value;
+    appsLoaded = true;
+    return value;
   },
   updateApps(apps: App[]) {
+    appsCache = apps;
+    appsLoaded = true;
     return keyvStore.set<IKeyvStore['apps']>(EKeyv.apps, apps);
   },
 };

@@ -1,14 +1,5 @@
-import intl from 'react-intl-universal';
-import React, { useEffect, useRef, useState } from 'react';
-import {
-  Modal,
-  message,
-  Input,
-  Form,
-  Statistic,
-  Button,
-  Typography,
-} from 'antd';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Modal, Button, Typography } from 'antd';
 import { request } from '@/utils/http';
 import config from '@/utils/config';
 import {
@@ -17,10 +8,20 @@ import {
 } from '@ant-design/icons';
 import { PageLoading } from '@ant-design/pro-layout';
 import { logEnded } from '@/utils';
-import { CrontabStatus } from './type';
 import Ansi from 'ansi-to-react';
+import WebSocketManager from '@/utils/websocket';
 
-const { Countdown } = Statistic;
+const CHUNK_LIMIT = 256 * 1024;
+const POLL_INTERVAL = 2000;
+
+interface ILogChunkResponse {
+  content: string;
+  offset: number;
+  nextOffset: number;
+  done: boolean;
+  total: number;
+  log_path: string;
+}
 
 const CronLogModal = ({
   cron,
@@ -35,64 +36,135 @@ const CronLogModal = ({
   data?: string;
   logUrl?: string;
 }) => {
-  const [value, setValue] = useState<string>(intl.get('启动中...'));
-  const [loading, setLoading] = useState<any>(true);
-  const [executing, setExecuting] = useState<any>(true);
+  const startTip = 'Starting...';
+  const emptyTip = 'No logs yet';
+  const [value, setValue] = useState<string>(startTip);
+  const [loading, setLoading] = useState(true);
+  const [executing, setExecuting] = useState(true);
   const [isPhone, setIsPhone] = useState(false);
   const scrollInfoRef = useRef({ value: 0, down: true });
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(false);
+  const offsetRef = useRef(0);
+  const logPathRef = useRef('');
+  const logTextRef = useRef(startTip);
   const uniqPath = logUrl ? logUrl : String(cron?.id);
 
-  const getCronLog = (isFirst?: boolean) => {
-    if (isFirst) {
-      setLoading(true);
+  const clearTimer = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
     }
-    request
-      .get(logUrl ? logUrl : `${config.apiPrefix}crons/${cron.id}/log`)
-      .then(({ code, data }) => {
-        if (
-          code === 200 &&
-          localStorage.getItem('logCron') === uniqPath &&
-          data !== value
-        ) {
-          const log = data as string;
-          setValue(log || intl.get('暂无日志'));
-          const hasNext = Boolean(
-            log && !logEnded(log) && !log.includes('任务未运行'),
-          );
-          if (!hasNext && !logEnded(value) && value !== intl.get('启动中...')) {
-            setTimeout(() => {
-              autoScroll();
-            });
-          }
-          setExecuting(hasNext);
-          if (hasNext) {
-            setTimeout(() => {
-              autoScroll();
-              getCronLog();
-            }, 2000);
-          }
-        }
-      })
-      .finally(() => {
-        if (isFirst) {
-          setLoading(false);
-        }
-      });
   };
 
   const autoScroll = () => {
     if (!scrollInfoRef.current.down) {
       return;
     }
-
     setTimeout(() => {
       document
-        .querySelector('#log-flag')!
-        .scrollIntoView({ behavior: 'smooth' });
-    }, 600);
+        .querySelector('#log-flag')
+        ?.scrollIntoView({ behavior: 'smooth' });
+    }, 300);
+  };
+
+  const appendLog = useCallback(
+    (chunk: string) => {
+      const base = [startTip, emptyTip].includes(logTextRef.current)
+        ? ''
+        : logTextRef.current;
+      const next = chunk ? `${base}${chunk}` : base || emptyTip;
+      logTextRef.current = next;
+      setValue(next);
+      return next;
+    },
+    [emptyTip, startTip],
+  );
+
+  function scheduleNext(delay: number) {
+    clearTimer();
+    timerRef.current = setTimeout(() => {
+      getCronLog();
+    }, delay);
+  }
+
+  const getCronLog = () => {
+    if (!mountedRef.current || !visible || !cron?.id) {
+      return;
+    }
+
+    if (logUrl) {
+      request
+        .get(logUrl)
+        .then(({ code, data: logData }) => {
+          if (code === 200 && localStorage.getItem('logCron') === uniqPath) {
+            const log = (logData as string) || emptyTip;
+            logTextRef.current = log;
+            setValue(log);
+            setExecuting(false);
+          }
+        })
+        .finally(() => setLoading(false));
+      return;
+    }
+
+    request
+      .get(
+        `${config.apiPrefix}crons/${cron.id}/log/chunk?offset=${offsetRef.current}&limit=${CHUNK_LIMIT}`,
+      )
+      .then(({ code, data: logData }) => {
+        if (code !== 200 || localStorage.getItem('logCron') !== uniqPath) {
+          return;
+        }
+        const chunk = logData as ILogChunkResponse;
+        if (
+          chunk.log_path &&
+          logPathRef.current &&
+          chunk.log_path !== logPathRef.current
+        ) {
+          logPathRef.current = chunk.log_path;
+          offsetRef.current = 0;
+          logTextRef.current = emptyTip;
+          setValue(emptyTip);
+          scheduleNext(0);
+          return;
+        }
+        if (chunk.log_path && !logPathRef.current) {
+          logPathRef.current = chunk.log_path;
+        }
+
+        offsetRef.current = chunk.nextOffset || 0;
+
+        if (chunk.content) {
+          appendLog(chunk.content);
+          autoScroll();
+        } else if (chunk.total === 0 && [startTip, emptyTip].includes(value)) {
+          logTextRef.current = emptyTip;
+          setValue(emptyTip);
+        }
+
+        const merged = logTextRef.current;
+        const hasNext = Boolean(merged && !logEnded(merged));
+        setExecuting(hasNext);
+
+        if (!mountedRef.current || !visible) {
+          return;
+        }
+        if (!chunk.done) {
+          scheduleNext(0);
+          return;
+        }
+        if (hasNext) {
+          scheduleNext(POLL_INTERVAL);
+        }
+      })
+      .finally(() => {
+        setLoading(false);
+      });
   };
 
   const cancel = () => {
+    clearTimer();
     localStorage.removeItem('logCron');
     handleCancel();
   };
@@ -107,6 +179,22 @@ const CronLogModal = ({
     }
   };
 
+  const handleWsLog = useCallback(
+    (payload: { message?: string; references?: number[] }) => {
+      if (!visible || !cron?.id || logUrl) {
+        return;
+      }
+      const { message = '', references = [] } = payload;
+      if (!message || !references.includes(cron.id)) {
+        return;
+      }
+      const merged = appendLog(message);
+      setExecuting(!logEnded(merged));
+      autoScroll();
+    },
+    [appendLog, cron, logUrl, visible],
+  );
+
   const titleElement = () => {
     return (
       <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -120,17 +208,43 @@ const CronLogModal = ({
   };
 
   useEffect(() => {
-    if (cron && cron.id && visible) {
-      getCronLog(true);
-      scrollInfoRef.current.down = true;
+    if (!cron?.id || !visible) {
+      mountedRef.current = false;
+      clearTimer();
+      return;
     }
-  }, [cron, visible]);
+    mountedRef.current = true;
+    clearTimer();
+    offsetRef.current = 0;
+    logPathRef.current = '';
+    logTextRef.current = startTip;
+    setValue(startTip);
+    setLoading(true);
+    setExecuting(true);
+    scrollInfoRef.current.down = true;
+    getCronLog();
+
+    return () => {
+      mountedRef.current = false;
+      clearTimer();
+    };
+  }, [cron, logUrl, startTip, visible]);
 
   useEffect(() => {
     if (data) {
+      logTextRef.current = data;
       setValue(data);
+      setLoading(false);
     }
   }, [data]);
+
+  useEffect(() => {
+    const ws = WebSocketManager.getInstance();
+    ws.subscribe('cronLog', handleWsLog);
+    return () => {
+      ws.unsubscribe('cronLog', handleWsLog);
+    };
+  }, [handleWsLog]);
 
   useEffect(() => {
     setIsPhone(document.body.clientWidth < 768);
@@ -147,7 +261,7 @@ const CronLogModal = ({
       onCancel={() => cancel()}
       footer={[
         <Button type="primary" onClick={() => cancel()}>
-          {intl.get('知道了')}
+          OK
         </Button>,
       ]}
     >
