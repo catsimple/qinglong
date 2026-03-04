@@ -12,7 +12,7 @@ export function runCron(
   cron: ICron,
   options: IRunCronOptions = {},
 ): Promise<number | void> {
-  const runTask = () => {
+  const runTask = (): Promise<any> => {
     return new Promise(async (resolve: any) => {
       Logger.info(
         `[schedule][start run cron] params ${JSON.stringify({
@@ -55,7 +55,7 @@ export function runCron(
   };
 
   if (options.manual) {
-    return taskLimit.manualRunWithCronLimit(runTask);
+    return taskLimit.manualRunWithCronLimit<any>(runTask);
   }
-  return taskLimit.runWithCronLimit(cron, runTask);
+  return taskLimit.runWithCronLimit<any>(cron, runTask);
 }
